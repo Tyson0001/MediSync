@@ -7,6 +7,7 @@ import appointmentModel from "../models/appointmentModel.js";
 import { v2 as cloudinary } from 'cloudinary'
 import stripe from "stripe";
 import razorpay from 'razorpay';
+import { GoogleGenerativeAI } from "@google/generative-ai";
 
 // Gateway Initialize
 const stripeInstance = new stripe(process.env.STRIPE_SECRET_KEY)
@@ -14,6 +15,9 @@ const razorpayInstance = new razorpay({
     key_id: process.env.RAZORPAY_KEY_ID,
     key_secret: process.env.RAZORPAY_KEY_SECRET,
 })
+
+// Gemini AI Initialize
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
 
 // API to register user
 const registerUser = async (req, res) => {
@@ -343,6 +347,63 @@ const verifyStripe = async (req, res) => {
 
 }
 
+// API for AI Health Assistant Chatbot
+const chatWithBot = async (req, res) => {
+    try {
+        const { message, history = [] } = req.body
+
+        if (!message || message.trim() === '') {
+            return res.json({ success: false, message: 'Message cannot be empty' })
+        }
+
+        if (!process.env.GEMINI_API_KEY || process.env.GEMINI_API_KEY === 'your_gemini_api_key_here') {
+            return res.json({ success: false, message: 'Chatbot is not configured. Please contact the administrator.' })
+        }
+
+        const model = genAI.getGenerativeModel({
+            model: 'gemini-1.5-flash',
+            systemInstruction: `You are MediSync AI — a friendly and knowledgeable medical assistant chatbot for the MediSync doctor appointment booking platform.
+
+Your role:
+- Help users understand how to book, cancel, or manage their doctor appointments on MediSync
+- Answer general health questions and provide basic medical information
+- Guide users to the right type of specialist based on their symptoms
+- Explain the appointment booking process and available specialities: General physician, Gynecologist, Dermatologist, Pediatricians, Neurologist, Gastroenterologist
+- Help with questions about payments (Razorpay / Stripe)
+
+Rules:
+- Always be empathetic, clear, and concise
+- For serious medical emergencies, always advise the user to call emergency services (112 in India) immediately
+- Do NOT provide specific diagnoses — encourage users to book an appointment with the appropriate specialist
+- Keep responses brief and helpful (2-4 sentences unless a detailed explanation is needed)
+- If asked something unrelated to health or MediSync, politely redirect the conversation`
+        })
+
+        // Build chat history in Gemini format
+        const chatHistory = history.map(msg => ({
+            role: msg.role === 'user' ? 'user' : 'model',
+            parts: [{ text: msg.text }]
+        }))
+
+        const chat = model.startChat({ history: chatHistory })
+        const result = await chat.sendMessage(message)
+        const response = await result.response
+        const text = response.text()
+
+        res.json({ success: true, reply: text })
+
+    } catch (error) {
+        console.log('Chatbot error:', error)
+        if (error.message && error.message.includes('API_KEY_INVALID')) {
+            return res.json({ success: false, message: 'Invalid Gemini API key. Please check the configuration.' })
+        }
+        if (error.message && error.message.includes('quota')) {
+            return res.json({ success: false, message: 'API quota exceeded. Please try again later.' })
+        }
+        res.json({ success: false, message: 'Unable to get a response. Please try again.' })
+    }
+}
+
 export {
     loginUser,
     registerUser,
@@ -354,5 +415,6 @@ export {
     paymentRazorpay,
     verifyRazorpay,
     paymentStripe,
-    verifyStripe
+    verifyStripe,
+    chatWithBot
 }
